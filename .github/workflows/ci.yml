@@ -23,19 +23,21 @@ jobs:
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "mkdir -p ~/hello-python-ci"
           scp -o StrictHostKeyChecking=no app.py requirements.txt ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }}:~/hello-python-ci/ || true
 
-      - name: Install Python on VM
+      - name: Install Python and dependencies on VM
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
-            which python3 >/dev/null 2>&1 || (sudo apt update -y && sudo apt install -y python3 python3-pip)
-            if [ -f ~/hello-python-ci/requirements.txt ] && [ -s ~/hello-python-ci/requirements.txt ]; then sudo pip3 install -r ~/hello-python-ci/requirements.txt; fi
+            sudo apt update -y
+            sudo apt install -y python3 python3-pip
+            if [ -f ~/hello-python-ci/requirements.txt ]; then
+              pip3 install -r ~/hello-python-ci/requirements.txt
+            fi
           "
 
-      - name: Run app with nohup and check log
+      - name: Run app once and check output
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} "
             cd ~/hello-python-ci
-            pgrep -f 'python3 app.py' && kill \$(pgrep -f 'python3 app.py') || true
-            nohup python3 app.py > app.log 2>&1 &
-            sleep 2
+            python3 -u app.py > app.log 2>&1
+            cat app.log
             grep -q 'Hello, World!' app.log
           "
