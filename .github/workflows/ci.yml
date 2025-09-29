@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest
+
+      - name: Run tests
+        run: pytest -q
+
+  deploy:
+    # Deploy only on direct pushes to main (not on PRs)
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rsync and ssh
+        run: sudo apt-get update && sudo apt-get install -y rsync
+
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Copy project to remote (rsync)
+        run: |
+          rsync -avz --delete             -e "ssh -o StrictHostKeyChecking=no"             ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:${{ secrets.APP_DIR }}
+
+      - name: Install deps + restart app (systemd if available, else nohup fallback)
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
+            set -e
+            cd "${{ secrets.APP_DIR }}"
+            python3 -m venv .venv || true
+            . .venv/bin/activate
+            if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+            if command -v systemctl >/dev/null 2>&1 && sudo systemctl list-unit-files | grep -q "hello-python.service"; then
+              echo "[deploy] Restarting systemd service hello-python"
+              sudo systemctl daemon-reload || true
+              sudo systemctl restart hello-python
+              sudo systemctl status hello-python --no-pager -l || true
+            else
+              echo "[deploy] systemd not found or service missing. Starting with nohup..."
+              pkill -f "python app.py" || true
+              nohup .venv/bin/python app.py > app.log 2>&1 &
+              sleep 2
+              pgrep -f "python app.py" >/dev/null && echo "App started (nohup) ✅" || (echo "Failed to start app" && exit 1)
+            fi
+          '
